@@ -1,0 +1,169 @@
+---
+title: "Guided Project: NYC School Perceptions"
+author: "Kyle Wilbert"
+date: "19 October 2019"
+output: html_notebook
+---
+
+## Introduction
+In this project, we'll be analyzing data from NYC school surveys of parents, teachers, and students to understand how each audience perceives NYC schools.
+
+Questions we will consider include:
+- Do student, teacher, and parent perceptions of NYC school quality appear to be related to demographic and academic success metrics?
+- Do students, teachers, and parents have similar perceptions of NYC school quality?
+
+-----
+
+Load the libraries needed to perform analysis
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+```
+
+Import datasets
+```{r}
+combined <- read_csv('combined.csv')
+survey <- read_tsv('masterfile11_gened_final.txt')
+survey_d75 <- read_tsv('masterfile11_d75_final.txt')
+```
+Do you have any thoughts on which variables will be important for your analysis?
+- I think the percentages are going to be more useful than the actual numbers
+
+Can any variables be excluded from the analysis?
+- I don't think I need the actual numbers of responses or the actual responses themselves. I mostly need the summary stats of the responses (percentages)
+- I also only need data about high schools, not the other types of schools
+
+Is there a variable you can use as a key to join the survey data to the combined data set you've already prepared for analysis?
+- definitely need the DBN to join the datasets
+
+So let's filter the survey data to include only high schools and only the columns we need
+
+```{r}
+survey_select <- survey %>% 
+  filter(schooltype == "High School") %>% 
+  select(dbn:aca_tot_11)
+```
+
+It doesn't look like we can filter out high schools from the D75 data, so we'll just focus on the selecting the correct columns.
+
+```{r}
+d75_select <- survey_d75 %>% 
+  select(dbn:aca_tot_11)
+```
+
+Next, we'll combine the survey data sets
+
+```{r}
+all_surveys <- survey_select %>% 
+  bind_rows(d75_select)
+```
+
+Let's rename `dbn` to `DBN` so we can join this dataset with the `combined` dataset
+```{r}
+all_surveys <- all_surveys %>% 
+  rename(DBN = dbn)
+```
+
+Now we can left join `all_surveys` to `combined`. We want to keep everything in the `combined` dataset and join anything in `all_surveys` that matches.
+
+```{r}
+combined_surveys <- combined %>% 
+  left_join(all_surveys, by='DBN')
+```
+
+Now we're ready for some analysis. Let's revisit the question:
+- Do student, teacher, and parent perceptions of NYC school quality appear to be related to demographic and academic success metrics?
+
+Let's create a correlation matrix to see if there are any interesting correlations between variables.
+
+```{r}
+cor_mat <- combined_surveys %>%
+  select(avg_sat_score, saf_p_11:aca_tot_11) %>% 
+  cor(use = "pairwise.complete.obs")
+
+cor_tib <- cor_mat %>% 
+  as_tibble(rownames = "variable")
+  
+```
+
+So we've got our correlation matrix. Let's filter it for strong correlations (> 0.25 or < -0.25)
+
+```{r}
+strong_corr <- cor_tib %>% 
+  select(variable, avg_sat_score) %>% 
+  filter(avg_sat_score > 0.25 | avg_sat_score < -0.25)
+```
+
+There are only a handful of scores with meaningful correlations. Let's try some scatterplots to visualize some of these relationships
+
+```{r}
+create_scatter <- function(x,y) {
+  ggplot(data = combined_surveys) +
+    aes_string(x=x, y=y) +
+    geom_point(alpha = 0.3) +
+    theme(panel.background = element_rect(fill='white'))
+}
+
+x_var <- strong_corr$variable[2:5]
+y_var <- "avg_sat_score"
+
+map2(x_var, y_var, create_scatter)
+```
+
+Across all three groups there appears to be a positive correlation between higher average SAT scores and higher Safety and Respect scores.
+
+Let's take a closer look at each group's response. We'll reshape the data to isolate the question and its score.
+```{r}
+combined_surveys_gather <- combined_surveys %>% 
+  gather(key='survey_question', value=score, saf_p_11:aca_tot_11)
+```
+
+Next, we'll break it down further to isolate the response type and the question
+
+```{r}
+combined_surveys_gather <- combined_surveys_gather %>% 
+  mutate('response_type' = str_sub(survey_question,4,6)) %>% 
+  mutate('question' = str_sub(survey_question,1,3))
+```
+
+Getting closer - we just need to clean up the response type column now by replacing existing strings with more descriptive words.
+
+```{r}
+combined_surveys_gather <- combined_surveys_gather %>% 
+  mutate(response_type = ifelse(response_type == '_p_', 'parent',
+                                ifelse(response_type == '_t_', 'teacher',
+                                       ifelse(response_type == '_s_', 'student',
+                                              ifelse(response_type == '_to','total','NA')))))
+```
+
+So, let's see a simple summary table of results by group
+```{r}
+comparison <- combined_surveys_gather %>% 
+  group_by(response_type) %>% 
+  summarize(mean(score,na.rm=TRUE))
+```
+
+The average scores of those in the schools (teachers and students) is lower than that of the parents. The students have the lowest average scores while the parents have the highest.
+
+What does this look like?
+```{r}
+combined_surveys_gather %>% 
+  filter(response_type != 'total') %>% 
+  ggplot() +
+  aes(x = question, y = score, fill = response_type) +
+  geom_boxplot()
+```
+
+The box plots above show this pattern more clearly and across all questions. On average, the parents have the highest scores across all questions, the students the lowest, with the teachers in the middle.
+
+### For further analysis:
+- Is there a relationship between gender percentages and average SAT scores? How about for the different sections of the SAT (Reading, Writing, and Math)?
+
+- Which NYC schools seem to have the best quality metrics according to survey data? Is there a difference if you break this down by response type?
+
+- Can you learn anything from the differences in school quality metric perception between groups? For example, if you created a new variable by subtracting saf_p_11 from saf_p_11, do you think this difference in how students and parents perceive safety may be related to any other variables?
+
